@@ -1,0 +1,45 @@
+# Environment & secrets
+.env
+.env.*
+!.env.example
+kaggle.json
+
+# Kaggle credentials directory (if copied locally)
+.kaggle/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Dataset files (downloaded via API - do not commit)
+*.csv
+*.zip
+data/
+
+# OS stuff
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
