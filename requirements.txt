@@ -8,6 +8,7 @@ xgboost==3.3.0
 imbalanced-learn==0.14.2
 joblib==1.5.3
 streamlit==1.59.0
+shap==0.52.0
 kagglehub==1.0.2
 kagglesdk==0.1.33
 python-dotenv==1.2.2

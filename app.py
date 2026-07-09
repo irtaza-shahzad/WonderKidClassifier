@@ -1,16 +1,71 @@
 import os
+
+import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import shap
 import streamlit as st
-import joblib
 
 MODEL_PATH = "wonderkid_model.joblib"
 st.set_page_config(page_title="Wonderkid Detector", page_icon=None, layout="centered")
+
+READABLE_FEATURES = {
+    "height in cm": "Height (cm)",
+    "age at valuation": "Age at valuation",
+    "log starting value": "Starting market value (log)",
+    "total games": "Senior games",
+    "goals per game": "Goals per game",
+    "assists per game": "Assists per game",
+    "minutes per game": "Minutes per game",
+    "cards per game": "Cards per game",
+    "has senior appearances": "Has senior appearances",
+}
 
 
 @st.cache_resource
 def load_bundle(path):
     return joblib.load(path)
+
+
+@st.cache_resource
+def build_shap_explainer(explain_model):
+    preprocessor = explain_model.named_steps["preprocessor"]
+    classifier = explain_model.named_steps["classifier"]
+    feature_names = preprocessor.get_feature_names_out()
+    explainer = shap.TreeExplainer(classifier)
+    return preprocessor, explainer, feature_names
+
+
+def readable_feature_name(name):
+    if name.startswith("cat__"):
+        body = name.removeprefix("cat__")
+        if body.startswith("position_"):
+            return f"Position: {body.removeprefix('position_')}"
+        if body.startswith("foot_"):
+            return f"Foot: {body.removeprefix('foot_')}"
+        if body.startswith("league_group_"):
+            return f"League: {body.removeprefix('league_group_')}"
+        return body.replace("_", " ").title()
+    if name.startswith("num__"):
+        body = name.removeprefix("num__").replace("_", " ")
+        return READABLE_FEATURES.get(body, body.title())
+    return name.replace("_", " ").title()
+
+
+def shap_contributions(explainer, transformed_row, feature_names):
+    explanation = explainer(transformed_row)
+    values = explanation.values[0]
+    rows = []
+    for feature_name, shap_value in zip(feature_names, values, strict=False):
+        rows.append(
+            {
+                "Feature": readable_feature_name(feature_name),
+                "SHAP value": float(shap_value),
+                "Impact": "Increases probability" if shap_value > 0 else "Decreases probability",
+            }
+        )
+    return pd.DataFrame(rows).sort_values("SHAP value", key=np.abs, ascending=False)
 
 
 st.title("Wonderkid Detector")
@@ -28,12 +83,19 @@ if not os.path.exists(MODEL_PATH):
 
 bundle = load_bundle(MODEL_PATH)
 model = bundle["model"]
+explain_model = bundle.get("explain_model")
 default_threshold = float(bundle["threshold"])
 base_rate = float(bundle.get("base_rate", 0.08))
 feature_cols = bundle["feature_cols"]
 positions = bundle["positions"]
 feet = bundle["feet"]
 league_groups = bundle["league_groups"]
+
+if explain_model is None:
+    st.warning(
+        "This model bundle does not include SHAP support yet. Re-run the notebook's final save cell "
+        "after training to regenerate wonderkid_model.joblib."
+    )
 
 st.info(
     f"Only about {base_rate*100:.0f}% of young players in the data are wonderkids, so a probability "
@@ -108,6 +170,36 @@ if st.button("Predict", type="primary"):
         "wonderkids vs fewer false alarms."
     )
 
+    if explain_model is not None:
+        st.subheader("Why this prediction? (SHAP)")
+        st.caption(
+            "SHAP shows how each input pushed the model's raw score up or down for this player. "
+            "Positive values increase wonderkid probability; negative values decrease it."
+        )
+
+        preprocessor, explainer, feature_names = build_shap_explainer(explain_model)
+        transformed_row = preprocessor.transform(row)
+        explanation = explainer(transformed_row)
+        contributions = shap_contributions(explainer, transformed_row, feature_names)
+        top = contributions.head(10).sort_values("SHAP value")
+
+        fig_bar, ax = plt.subplots(figsize=(8, 4))
+        colors = ["#d62728" if value > 0 else "#1f77b4" for value in top["SHAP value"]]
+        ax.barh(top["Feature"], top["SHAP value"], color=colors)
+        ax.axvline(0, color="black", linewidth=0.8)
+        ax.set_xlabel("SHAP value (impact on wonderkid score)")
+        ax.set_title("Top feature contributions for this player")
+        st.pyplot(fig_bar, clear_figure=True)
+
+        st.dataframe(
+            contributions.head(10)[["Feature", "SHAP value", "Impact"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        shap.plots.waterfall(explanation[0], max_display=10, show=False)
+        st.pyplot(plt.gcf(), clear_figure=True)
+
 with st.expander("What is this model?"):
     st.markdown(
         "- Trained on Kaggle's `davidcariboo/player-scores` dataset.\n"
@@ -115,5 +207,6 @@ with st.expander("What is this model?"):
         "ages 21-25 (engineered purely from valuation data, no scout opinions).\n"
         "- Features use only information available at the first under-21 valuation, so there is "
         "no leakage from the future.\n"
-        "- Model: tuned XGBoost with calibrated probabilities and a tunable decision threshold."
+        "- Model: tuned XGBoost with calibrated probabilities, a tunable decision threshold, "
+        "and SHAP explanations in the demo."
     )
