@@ -24,12 +24,12 @@ READABLE_FEATURES = {
 
 
 @st.cache_resource
-def load_bundle(path):
+def load_bundle(path, file_mtime):
     return joblib.load(path)
 
 
 @st.cache_resource
-def build_shap_explainer(explain_model):
+def build_shap_explainer(_explain_model_id, explain_model):
     preprocessor = explain_model.named_steps["preprocessor"]
     classifier = explain_model.named_steps["classifier"]
     feature_names = preprocessor.get_feature_names_out()
@@ -53,8 +53,7 @@ def readable_feature_name(name):
     return name.replace("_", " ").title()
 
 
-def shap_contributions(explainer, transformed_row, feature_names):
-    explanation = explainer(transformed_row)
+def shap_contributions(explanation, feature_names):
     values = explanation.values[0]
     rows = []
     for feature_name, shap_value in zip(feature_names, values, strict=False):
@@ -66,6 +65,41 @@ def shap_contributions(explainer, transformed_row, feature_names):
             }
         )
     return pd.DataFrame(rows).sort_values("SHAP value", key=np.abs, ascending=False)
+
+
+def render_shap_section(explain_model, row):
+    st.subheader("Why this prediction? (SHAP)")
+    st.caption(
+        "SHAP shows how each input pushed the model's raw score up or down for this player. "
+        "Positive values increase wonderkid probability; negative values decrease it."
+    )
+
+    model_id = id(explain_model)
+    preprocessor, explainer, feature_names = build_shap_explainer(model_id, explain_model)
+    transformed_row = preprocessor.transform(row)
+    explanation = explainer(transformed_row)
+    contributions = shap_contributions(explanation, feature_names)
+    top = contributions.head(10).sort_values("SHAP value")
+
+    fig_bar, ax = plt.subplots(figsize=(8, 4))
+    colors = ["#d62728" if value > 0 else "#1f77b4" for value in top["SHAP value"]]
+    ax.barh(top["Feature"], top["SHAP value"], color=colors)
+    ax.axvline(0, color="black", linewidth=0.8)
+    ax.set_xlabel("SHAP value (impact on wonderkid score)")
+    ax.set_title("Top feature contributions for this player")
+    st.pyplot(fig_bar, clear_figure=True)
+
+    st.dataframe(
+        contributions.head(10)[["Feature", "SHAP value", "Impact"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    try:
+        shap.plots.waterfall(explanation[0], max_display=10, show=False)
+        st.pyplot(plt.gcf(), clear_figure=True)
+    except Exception as waterfall_error:
+        st.caption(f"Waterfall plot unavailable: {waterfall_error}")
 
 
 st.title("Wonderkid Detector")
@@ -81,7 +115,8 @@ if not os.path.exists(MODEL_PATH):
     )
     st.stop()
 
-bundle = load_bundle(MODEL_PATH)
+model_mtime = os.path.getmtime(MODEL_PATH)
+bundle = load_bundle(MODEL_PATH, model_mtime)
 model = bundle["model"]
 explain_model = bundle.get("explain_model")
 default_threshold = float(bundle["threshold"])
@@ -94,7 +129,7 @@ league_groups = bundle["league_groups"]
 if explain_model is None:
     st.warning(
         "This model bundle does not include SHAP support yet. Re-run the notebook's final save cell "
-        "after training to regenerate wonderkid_model.joblib."
+        "and push the updated wonderkid_model.joblib to GitHub."
     )
 
 st.info(
@@ -171,34 +206,11 @@ if st.button("Predict", type="primary"):
     )
 
     if explain_model is not None:
-        st.subheader("Why this prediction? (SHAP)")
-        st.caption(
-            "SHAP shows how each input pushed the model's raw score up or down for this player. "
-            "Positive values increase wonderkid probability; negative values decrease it."
-        )
-
-        preprocessor, explainer, feature_names = build_shap_explainer(explain_model)
-        transformed_row = preprocessor.transform(row)
-        explanation = explainer(transformed_row)
-        contributions = shap_contributions(explainer, transformed_row, feature_names)
-        top = contributions.head(10).sort_values("SHAP value")
-
-        fig_bar, ax = plt.subplots(figsize=(8, 4))
-        colors = ["#d62728" if value > 0 else "#1f77b4" for value in top["SHAP value"]]
-        ax.barh(top["Feature"], top["SHAP value"], color=colors)
-        ax.axvline(0, color="black", linewidth=0.8)
-        ax.set_xlabel("SHAP value (impact on wonderkid score)")
-        ax.set_title("Top feature contributions for this player")
-        st.pyplot(fig_bar, clear_figure=True)
-
-        st.dataframe(
-            contributions.head(10)[["Feature", "SHAP value", "Impact"]],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        shap.plots.waterfall(explanation[0], max_display=10, show=False)
-        st.pyplot(plt.gcf(), clear_figure=True)
+        try:
+            render_shap_section(explain_model, row)
+        except Exception as exc:
+            st.error("SHAP explanation failed.")
+            st.exception(exc)
 
 with st.expander("What is this model?"):
     st.markdown(
