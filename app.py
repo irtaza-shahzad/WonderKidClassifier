@@ -29,9 +29,9 @@ def load_bundle(path, file_mtime):
 
 
 @st.cache_resource
-def build_shap_explainer(_explain_model_id, explain_model):
-    preprocessor = explain_model.named_steps["preprocessor"]
-    classifier = explain_model.named_steps["classifier"]
+def build_shap_explainer(model_mtime, _explain_model):
+    preprocessor = _explain_model.named_steps["preprocessor"]
+    classifier = _explain_model.named_steps["classifier"]
     feature_names = preprocessor.get_feature_names_out()
     explainer = shap.TreeExplainer(classifier)
     return preprocessor, explainer, feature_names
@@ -67,15 +67,14 @@ def shap_contributions(explanation, feature_names):
     return pd.DataFrame(rows).sort_values("SHAP value", key=np.abs, ascending=False)
 
 
-def render_shap_section(explain_model, row):
+def render_shap_section(explain_model, row, model_mtime):
     st.subheader("Why this prediction? (SHAP)")
     st.caption(
         "SHAP shows how each input pushed the model's raw score up or down for this player. "
         "Positive values increase wonderkid probability; negative values decrease it."
     )
 
-    model_id = id(explain_model)
-    preprocessor, explainer, feature_names = build_shap_explainer(model_id, explain_model)
+    preprocessor, explainer, feature_names = build_shap_explainer(model_mtime, explain_model)
     transformed_row = preprocessor.transform(row)
     explanation = explainer(transformed_row)
     contributions = shap_contributions(explanation, feature_names)
@@ -207,7 +206,7 @@ if st.button("Predict", type="primary"):
 
     if explain_model is not None:
         try:
-            render_shap_section(explain_model, row)
+            render_shap_section(explain_model, row, model_mtime)
         except Exception as exc:
             st.error("SHAP explanation failed.")
             st.exception(exc)
